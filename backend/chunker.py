@@ -1,5 +1,12 @@
-def create_chunks(pages, chunk_line_limit=15, overlap_lines=3) -> list[dict]:
-    """Split page text line-by-line with overlap (keeps table rows intact)."""
+"""Text chunking with overlap. (Task 2)"""
+from backend.config import CHUNK_LINE_LIMIT, CHUNK_OVERLAP_LINES
+
+def create_chunks(
+    pages: list[dict],
+    chunk_line_limit: int = CHUNK_LINE_LIMIT,
+    overlap_lines: int = CHUNK_OVERLAP_LINES,
+) -> list[dict]:
+    """Split text into overlapping chunks to preserve context."""
     chunks = []
     step = max(chunk_line_limit - overlap_lines, 1)
     chunk_id = 0
@@ -17,3 +24,4 @@ def create_chunks(pages, chunk_line_limit=15, overlap_lines=3) -> list[dict]:
                 chunk_id += 1
 
     return chunks
+
