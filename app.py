@@ -1,79 +1,182 @@
 import os
+
 import streamlit as st
+from dotenv import load_dotenv
 
-from backend.pdf_loader import extract_text_from_pdf
-from backend.chunker import create_chunks
-
-st.set_page_config(
-    page_title="Financial Report RAG",
-    layout="wide"
+from backend.service import (
+    ask_question,
+    document_status,
+    index_pdf,
+    reset_document,
+    save_uploaded_pdf,
 )
 
-st.title("📊 Financial Report RAG")
+load_dotenv()
 
-uploaded_file = st.file_uploader(
-    "Upload PDF",
-    type=["pdf"]
-)
 
-if uploaded_file:
+def render_citations(sources):
+    with st.expander("📖 Sources"):
+        for i, src in enumerate(sources, start=1):
+            st.markdown(
+                f"**Source {i} | Page {src['page']} | Score {src['score']:.3f}**"
+            )
+            st.code(src["content"])
 
-    os.makedirs(
-        "uploads",
-        exist_ok=True
+
+def process_question(question, api_key):
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": question,
+        }
     )
 
-    pdf_path = os.path.join(
-        "uploads",
-        uploaded_file.name
-    )
+    with st.chat_message("user"):
+        st.markdown(question)
 
-    with open(pdf_path, "wb") as f:
-        f.write(
-            uploaded_file.getbuffer()
-        )
-
-    st.success("PDF uploaded successfully!")
-
-    if st.button("Extract Text"):
-
-        pages = extract_text_from_pdf(
-            pdf_path
-        )
-
-        chunks = create_chunks(
-            pages
-        )
-
-        st.success(
-            f"""
-Total Pages: {len(pages)}
-
-Total Chunks: {len(chunks)}
-"""
-        )
-
-        if len(chunks) > 0:
-
-            st.subheader("First Chunk")
-
-            st.write(
-                chunks[0]["content"]
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            result = ask_question(
+                question=question,
+                api_key=api_key,
             )
 
-            st.subheader(
-                "Chunk Metadata"
-            )
+            st.markdown(result["answer"])
 
-            st.json(
+            if result.get("sources"):
+                render_citations(result["sources"])
+
+            st.session_state.messages.append(
                 {
-                    "chunk_id": chunks[0]["chunk_id"],
-                    "page": chunks[0]["page"]
+                    "role": "assistant",
+                    "content": result["answer"],
+                    "citations": result.get("sources", []),
                 }
             )
 
-        else:
-            st.warning(
-                "No text could be extracted from this PDF."
-            )
-            
+
+def main():
+    st.set_page_config(
+        page_title="FinReport AI",
+        page_icon="📊",
+        layout="wide",
+    )
+
+    api_key = os.getenv("GOOGLE_API_KEY")
+
+    if not api_key:
+        st.error(
+            "GOOGLE_API_KEY not found. Add it to your .env file."
+        )
+        st.stop()
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    status = document_status()
+    metadata = status if status.get("ready") else None
+
+    # =========================
+    # Sidebar
+    # =========================
+
+    with st.sidebar:
+        st.title("📊 FinReport AI")
+
+        uploaded_file = st.file_uploader(
+            "Upload Financial Report",
+            type=["pdf"],
+        )
+
+        if uploaded_file:
+            if st.button(
+                "Process PDF",
+                use_container_width=True,
+            ):
+                with st.spinner("Processing PDF..."):
+                    path = save_uploaded_pdf(
+                        uploaded_file.read(),
+                        uploaded_file.name,
+                    )
+
+                    result = index_pdf(
+                        path,
+                        filename=uploaded_file.name,
+                    )
+
+                st.success(
+                    f"Indexed {result['num_pages']} pages "
+                    f"and {result['num_chunks']} chunks."
+                )
+
+                st.rerun()
+
+        st.divider()
+
+        if metadata:
+            st.subheader("Current Document")
+
+            st.write(f"📄 {metadata['filename']}")
+            st.write(f"Pages: {metadata['num_pages']}")
+            st.write(f"Chunks: {metadata['num_chunks']}")
+
+            if st.button(
+                "🗑 Reset Document",
+                use_container_width=True,
+            ):
+                reset_document()
+                st.session_state.messages = []
+                st.rerun()
+
+        st.divider()
+
+        if st.button(
+            "🧹 Clear Chat",
+            use_container_width=True,
+        ):
+            st.session_state.messages = []
+            st.rerun()
+
+    # =========================
+    # Main Area
+    # =========================
+
+    st.title("📊 FinReport AI")
+
+    st.caption(
+        "Upload a financial report and ask questions about it."
+    )
+
+    if not metadata:
+        st.info(
+            "Upload and process a PDF from the sidebar to begin."
+        )
+        return
+
+    # Chat History
+
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+            if (
+                msg["role"] == "assistant"
+                and msg.get("citations")
+            ):
+                render_citations(
+                    msg["citations"]
+                )
+
+    # Chat Input
+
+    if question := st.chat_input(
+        "Ask about the report..."
+    ):
+        process_question(
+            question,
+            api_key,
+        )
+
+
+if __name__ == "__main__":
+    main()
